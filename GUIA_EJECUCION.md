@@ -36,19 +36,24 @@ Abrir 3 terminales en la carpeta del proyecto.
 Terminal 1 (servidor):
 
 ```bash
-
-```./bin/chat_server 8080
+./bin/chat_server 9090
 
 Terminal 2 (cliente 1):
 
 ```bash
-./bin/chat_client alice 127.0.0.1 8080
+./bin/chat_client alice 127.0.0.1 9090
 ```
 
 Terminal 3 (cliente 2):
 
 ```bash
-./bin/chat_client bob 127.0.0.1 8080
+./bin/chat_client bob 127.0.0.1 9090
+```
+
+Nota: usa un puerto libre (9090 suele ser buena opcion). Puedes verificar antes con:
+
+```bash
+ss -ltn | grep ':9090' || echo '9090 libre'
 ```
 
 ## 4. Comandos utiles del cliente

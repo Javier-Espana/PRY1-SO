@@ -51,13 +51,19 @@ Ejecutables generados:
 
 ```bash
 # Terminal 1 (servidor)
-./bin/chat_server 8080
+./bin/chat_server 9090
 
 # Terminal 2 (cliente)
-./bin/chat_client alice 127.0.0.1 8080
+./bin/chat_client alice 127.0.0.1 9090
 
 # Terminal 3 (cliente)
-./bin/chat_client bob 127.0.0.1 8080
+./bin/chat_client bob 127.0.0.1 9090
+```
+
+Si el puerto está ocupado, verifica uno libre antes de iniciar:
+
+```bash
+ss -ltn | grep ':9090' || echo '9090 libre'
 ```
 
 ---
@@ -171,13 +177,13 @@ ping -c 3 192.168.50.10
 
 Servidor:
 ```bash
-./bin/chat_server 8080
+./bin/chat_server 9090
 ```
 
 Clientes:
 ```bash
-./bin/chat_client alice 192.168.50.10 8080
-./bin/chat_client bob   192.168.50.10 8080
+./bin/chat_client alice 192.168.50.10 9090
+./bin/chat_client bob   192.168.50.10 9090
 ```
 
 ### 4) Checklist de demo rápida
