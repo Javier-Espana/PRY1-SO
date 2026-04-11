@@ -2,8 +2,8 @@ CC            = gcc
 CFLAGS        = -Wall -Wextra -g -pthread
 SRC_DIR       = src
 BIN_DIR       = bin
-SERVER_SRC    = $(SRC_DIR)/server.c
-CLIENT_SRC    = $(SRC_DIR)/client.c
+SERVER_SRC    = $(SRC_DIR)/server/main.c $(SRC_DIR)/server/server_app.c
+CLIENT_SRC    = $(SRC_DIR)/client/main.c $(SRC_DIR)/client/client_app.c
 SERVER_BIN    = $(BIN_DIR)/chat_server
 CLIENT_BIN    = $(BIN_DIR)/chat_client
 LDLIBS_SERVER = -lpthread
@@ -14,10 +14,10 @@ LDLIBS_CLIENT = -lpthread -lncurses
 all: $(SERVER_BIN) $(CLIENT_BIN)
 
 $(SERVER_BIN): $(SERVER_SRC) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS_SERVER)
+	$(CC) $(CFLAGS) -o $@ $(SERVER_SRC) $(LDLIBS_SERVER)
 
 $(CLIENT_BIN): $(CLIENT_SRC) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS_CLIENT)
+	$(CC) $(CFLAGS) -o $@ $(CLIENT_SRC) $(LDLIBS_CLIENT)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)

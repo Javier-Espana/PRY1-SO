@@ -10,15 +10,23 @@ PRY1-SO/
 ├── Makefile
 ├── README.md
 ├── src/
-│   ├── server.c
-│   └── client.c
+│   ├── common/
+│   │   └── chat_protocol.h
+│   ├── server/
+│   │   ├── main.c
+│   │   ├── server_app.c
+│   │   └── server_app.h
+│   └── client/
+│       ├── main.c
+│       ├── client_app.c
+│       └── client_app.h
 ├── bin/
 │   ├── chat_server
 │   └── chat_client
 └── scripts/
 ```
 
-`src/` contiene código fuente, `bin/` los ejecutables compilados y `scripts/` queda para automatizaciones de demo/pruebas.
+`src/` contiene código fuente modular, `bin/` los ejecutables compilados y `scripts/` queda para automatizaciones de demo/pruebas.
 
 ---
 
@@ -185,7 +193,7 @@ Clientes:
 
 ## Parámetro de inactividad
 
-En `src/server.c`:
+En `src/server/server_app.c`:
 
 ```c
 #define INACTIVITY_SEC 60
