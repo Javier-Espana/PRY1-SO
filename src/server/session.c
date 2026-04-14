@@ -1,10 +1,7 @@
-#include "server_app.h"
+#include "session.h"
 
 #include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
 #include <pthread.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,9 +10,9 @@
 #include <unistd.h>
 
 #include "../common/chat_protocol.h"
+#include "../common/protocol.h"
 
 #define MAX_CLIENTS 50
-#define INACTIVITY_SEC 60
 
 typedef struct {
     int fd;
@@ -27,26 +24,35 @@ typedef struct {
     pthread_mutex_t sock_mutex;
 } Client;
 
-typedef struct {
-    int fd;
-    char ip[INET_ADDRSTRLEN];
-} ClientArg;
-
+/*
+ * Tabla de clientes compartida por todos los hilos.
+ * list_lock: rwlock porque la mayoria de operaciones (broadcast, DM, list, info)
+ * solo leen. Solo register/disconnect/change_status toman write-lock.
+ * Cada Client tiene ademas un sock_mutex propio para que dos hilos no se
+ * pisen al escribir al mismo socket (ver send_to_client).
+ */
 static Client clients[MAX_CLIENTS];
 static int client_count = 0;
 static pthread_rwlock_t list_lock = PTHREAD_RWLOCK_INITIALIZER;
-static int server_fd = -1;
 
+void session_init(void) {
+    memset(clients, 0, sizeof(clients));
+    client_count = 0;
+}
+
+/* Envia sin sincronizar. Usar solo al socket propio (el que lee este hilo). */
 static void send_raw(int fd, const char *msg) {
     send(fd, msg, strlen(msg), 0);
 }
 
+/* Envia al socket de otro cliente. Toma el mutex del socket para no mezclar bytes. */
 static void send_to_client(Client *c, const char *msg) {
     pthread_mutex_lock(&c->sock_mutex);
     send_raw(c->fd, msg);
     pthread_mutex_unlock(&c->sock_mutex);
 }
 
+/* Busca por nombre. Caller debe tener list_lock (read o write). */
 static int find_by_name(const char *name) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].active && strcmp(clients[i].username, name) == 0) {
@@ -56,6 +62,7 @@ static int find_by_name(const char *name) {
     return -1;
 }
 
+/* Busca por IP. Caller debe tener list_lock. */
 static int find_by_ip(const char *ip) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].active && strcmp(clients[i].ip, ip) == 0) {
@@ -65,6 +72,7 @@ static int find_by_ip(const char *ip) {
     return -1;
 }
 
+/* Primer slot libre en la tabla o -1. Caller debe tener write-lock. */
 static int find_free_slot(void) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (!clients[i].active) {
@@ -74,6 +82,10 @@ static int find_free_slot(void) {
     return -1;
 }
 
+/*
+ * Cierra fd, libera el slot y notifica USER_LEFT a todos.
+ * Caller DEBE tener write-lock (de ahi el sufijo _locked).
+ */
 static void remove_client_locked(int idx) {
     char buf[BUF_SIZE];
     snprintf(buf, sizeof(buf), "%s|%s\n", T_USER_LEFT, clients[idx].username);
@@ -90,8 +102,12 @@ static void remove_client_locked(int idx) {
     }
 }
 
-static void handle_register(int idx_or_neg __attribute__((unused)), int fd, const char *ip,
-                            char *fields[], int nf) {
+/*
+ * REGISTER | usuario
+ *   fields[0] = "REGISTER", fields[1] = nombre pedido.
+ * Valida unicidad de nombre e IP, inserta en la tabla, USER_JOINED a los demas.
+ */
+static void handle_register(int fd, const char *ip, char *fields[], int nf) {
     if (nf < 2 || strlen(fields[1]) == 0) {
         char r[128];
         snprintf(r, sizeof(r), "%s|%s|Nombre invalido\n", T_ERROR, ERR_NAME_INVALID);
@@ -162,6 +178,11 @@ static void handle_register(int idx_or_neg __attribute__((unused)), int fd, cons
     printf("[SERVER] Usuario '%s' conectado desde %s (slot %d)\n", fields[1], ip, slot);
 }
 
+/*
+ * MSG_BROADCAST | remitente | mensaje
+ *   fields[1] = remitente, fields[2] = texto.
+ * Reenvia como SERVER_BROADCAST|remitente|mensaje a todos los conectados.
+ */
 static void handle_broadcast(int sender_fd, char *fields[], int nf) {
     if (nf < 3) {
         send_raw(sender_fd, "ERROR|401|Formato invalido\n");
@@ -194,6 +215,11 @@ static void handle_broadcast(int sender_fd, char *fields[], int nf) {
     send_raw(sender_fd, "OK|Mensaje enviado\n");
 }
 
+/*
+ * MSG_DIRECT | remitente | destino | mensaje
+ *   fields[1]=remitente, fields[2]=destino, fields[3]=texto.
+ * Envia SERVER_DIRECT|remitente|mensaje al destino, o ERROR 201 si no existe.
+ */
 static void handle_direct(int sender_fd, char *fields[], int nf) {
     if (nf < 4) {
         send_raw(sender_fd, "ERROR|401|Formato invalido\n");
@@ -228,9 +254,11 @@ static void handle_direct(int sender_fd, char *fields[], int nf) {
     send_raw(sender_fd, r);
 }
 
-static void handle_list(int sender_fd, char *fields[], int nf) {
-    (void)fields;
-    (void)nf;
+/*
+ * LIST_USERS | remitente  ->  USER_LIST | n | user:estado | user:estado | ...
+ * n es el conteo de conectados.
+ */
+static void handle_list(int sender_fd) {
     char buf[BUF_SIZE];
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", T_USER_LIST);
@@ -255,6 +283,10 @@ static void handle_list(int sender_fd, char *fields[], int nf) {
     send_raw(sender_fd, buf);
 }
 
+/*
+ * GET_USER_INFO | remitente | usuario  ->  USER_INFO | usuario | ip | estado
+ *   fields[2] = usuario consultado. ERROR 201 si no existe.
+ */
 static void handle_get_info(int sender_fd, char *fields[], int nf) {
     if (nf < 3) {
         send_raw(sender_fd, "ERROR|401|Formato invalido\n");
@@ -276,6 +308,10 @@ static void handle_get_info(int sender_fd, char *fields[], int nf) {
     send_raw(sender_fd, buf);
 }
 
+/*
+ * CHANGE_STATUS | remitente | estado  ->  STATUS_UPDATE | usuario | estado
+ *   fields[2] debe ser ACTIVO, OCUPADO o INACTIVO. ERROR 301 si no.
+ */
 static void handle_change_status(int sender_fd, char *fields[], int nf) {
     if (nf < 3) {
         send_raw(sender_fd, "ERROR|401|Formato invalido\n");
@@ -306,9 +342,11 @@ static void handle_change_status(int sender_fd, char *fields[], int nf) {
     send_raw(sender_fd, r);
 }
 
-static void handle_disconnect(int idx, char *fields[], int nf) {
-    (void)fields;
-    (void)nf;
+/*
+ * DISCONNECT | remitente
+ * Responde OK al cliente, lo saca de la tabla y emite USER_LEFT|usuario a los demas.
+ */
+static void handle_disconnect(int idx) {
     char r[128];
     snprintf(r, sizeof(r), "%s|Hasta luego %s\n", T_OK, clients[idx].username);
     send_raw(clients[idx].fd, r);
@@ -318,8 +356,9 @@ static void handle_disconnect(int idx, char *fields[], int nf) {
     pthread_rwlock_unlock(&list_lock);
 }
 
-static void *inactivity_thread(void *arg) {
+void *session_inactivity_thread(void *arg) {
     (void)arg;
+    /* Revisa cada 10s; no es preciso al segundo, alcanza para un chat. */
     while (1) {
         sleep(10);
         time_t now = time(NULL);
@@ -346,7 +385,11 @@ static void *inactivity_thread(void *arg) {
     return NULL;
 }
 
-static void *client_thread(void *arg) {
+/*
+ * Loop por conexion: recibe, parsea, despacha. El primer mensaje debe ser
+ * REGISTER; despues se aceptan el resto. Termina con DISCONNECT o recv<=0.
+ */
+void *session_client_thread(void *arg) {
     ClientArg ca = *(ClientArg *)arg;
     free(arg);
 
@@ -389,15 +432,10 @@ static void *client_thread(void *arg) {
             *nl = '\0';
         }
 
-        int nf = 0;
         char tmp[BUF_SIZE];
         strncpy(tmp, buf, sizeof(tmp) - 1);
         tmp[sizeof(tmp) - 1] = '\0';
-        char *tok = strtok(tmp, "|");
-        while (tok && nf < 16) {
-            fields[nf++] = tok;
-            tok = strtok(NULL, "|");
-        }
+        int nf = proto_tokenize(tmp, fields, 16);
 
         if (nf == 0) {
             continue;
@@ -405,7 +443,7 @@ static void *client_thread(void *arg) {
 
         if (!registered) {
             if (strcmp(fields[0], T_REGISTER) == 0) {
-                handle_register(my_slot, fd, ip, fields, nf);
+                handle_register(fd, ip, fields, nf);
 
                 pthread_rwlock_rdlock(&list_lock);
                 for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -433,85 +471,16 @@ static void *client_thread(void *arg) {
         } else if (strcmp(fields[0], T_DIRECT) == 0) {
             handle_direct(fd, fields, nf);
         } else if (strcmp(fields[0], T_LIST) == 0) {
-            handle_list(fd, fields, nf);
+            handle_list(fd);
         } else if (strcmp(fields[0], T_GET_INFO) == 0) {
             handle_get_info(fd, fields, nf);
         } else if (strcmp(fields[0], T_CHANGE_STATUS) == 0) {
             handle_change_status(fd, fields, nf);
         } else if (strcmp(fields[0], T_DISCONNECT) == 0) {
-            handle_disconnect(my_slot, fields, nf);
+            handle_disconnect(my_slot);
             return NULL;
         } else {
             send_raw(fd, "ERROR|401|Tipo de mensaje desconocido\n");
         }
     }
-}
-
-int server_run(int port) {
-    signal(SIGPIPE, SIG_IGN);
-
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        perror("socket");
-        return 1;
-    }
-
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
-
-    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        close(server_fd);
-        return 1;
-    }
-
-    if (listen(server_fd, 10) < 0) {
-        perror("listen");
-        close(server_fd);
-        return 1;
-    }
-
-    printf("[SERVER] Escuchando en puerto %d\n", port);
-    printf("[SERVER] Timeout de inactividad: %d segundos\n", INACTIVITY_SEC);
-
-    memset(clients, 0, sizeof(clients));
-
-    pthread_t inactivity_tid;
-    pthread_create(&inactivity_tid, NULL, inactivity_thread, NULL);
-    pthread_detach(inactivity_tid);
-
-    while (1) {
-        struct sockaddr_in client_addr;
-        socklen_t clen = sizeof(client_addr);
-        int cfd = accept(server_fd, (struct sockaddr *)&client_addr, &clen);
-        if (cfd < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            perror("accept");
-            continue;
-        }
-
-        ClientArg *ca = malloc(sizeof(ClientArg));
-        if (!ca) {
-            close(cfd);
-            continue;
-        }
-        ca->fd = cfd;
-        inet_ntop(AF_INET, &client_addr.sin_addr, ca->ip, sizeof(ca->ip));
-
-        printf("[SERVER] Nueva conexion desde %s\n", ca->ip);
-
-        pthread_t tid;
-        pthread_create(&tid, NULL, client_thread, ca);
-        pthread_detach(tid);
-    }
-
-    close(server_fd);
-    return 0;
 }

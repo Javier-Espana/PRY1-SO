@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "client_app.h"
+#include "session.h"
 
 int main(int argc, char *argv[]) {
     if (argc != 4) {
@@ -10,5 +10,5 @@ int main(int argc, char *argv[]) {
     }
 
     int server_port = atoi(argv[3]);
-    return client_run(argv[1], argv[2], server_port);
+    return client_session_run(argv[1], argv[2], server_port);
 }
