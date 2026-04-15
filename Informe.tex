@@ -17,6 +17,7 @@
 \usepackage{fancyhdr}
 \usepackage{titlesec}
 \usepackage{caption}
+\usepackage{parskip}
 
 \hypersetup{
     colorlinks=true,
@@ -102,15 +103,77 @@ Angel Esteban Esquit Hernández\\[2cm]}
 \section{Introducción}
 
 Este documento describe la implementación completa del sistema de chat multithread
-desarrollado para el Proyecto~1 de CC3064.  Se detalla la estructura del proyecto,
+desarrollado para el Proyecto~1 de Sistemas Operativos.  Se detalla la estructura del proyecto,
 el diseño de cada componente (servidor y cliente), los mecanismos de sincronización
 empleados, el análisis de condiciones de carrera, la evaluación criterio por criterio
 según la rúbrica, y los casos borde y limitaciones conocidas de la implementación.
 
 El protocolo de comunicación definido en la Parte~1 (entregado el 27 de marzo de
-2026) se mantuvo sin cambios conceptuales; las únicas adiciones fueron extensiones
+2026) se mantuvo sin cambios conceptuales. Las únicas adiciones fueron extensiones
 prácticas no previstas en el documento original (código de error~999 para servidor
-lleno, comandos UX del cliente, e interfaz ncurses).
+lleno, comandos UX del cliente, e interfaz ncurses) al igual que implementación de
+multithreading en el lado del cliente.
+
+% ═════════════════════════════════════════════════════════
+\section{Investigación: Redes, Sockets y Configuración IP}
+\label{sec:investigacion}
+
+Esta sección resume los conceptos de red y las herramientas de sistema que
+fundamentan la implementación del chat.
+
+\subsection{Sockets TCP/IP}
+
+Un \textbf{socket} es un extremo de comunicación bidireccional entre dos procesos,
+posiblemente en máquinas distintas.  En el modelo BSD (adoptado por POSIX y Linux),
+un socket se identifica por un file descriptor y se manipula con las llamadas al
+sistema \texttt{socket()}, \texttt{bind()}, \texttt{listen()}, \texttt{accept()},
+\texttt{connect()}, \texttt{send()}, \texttt{recv()} y \texttt{close()}.
+
+Para este proyecto se usa la familia \texttt{AF\_INET} (IPv4) con tipo
+\texttt{SOCK\_STREAM} (TCP).
+
+\subsection{Configuración de red con \texttt{ip}}
+
+Para la demostración en clase, las máquinas se conectan a un switch Ethernet y se
+configuran IPs estáticas temporales en la misma subred.  La herramienta estándar en
+Linux moderno es \texttt{ip} del paquete \texttt{iproute2}.
+
+\subsubsection{Comandos utilizados}
+
+\begin{lstlisting}[style=protocol,caption={Configuración de red para la demo}]
+# Ver las interfaces de red disponibles y su estado
+ip link show
+
+# Ver las direcciones IP asignadas a cada interfaz
+ip address show
+
+# Asignar una IP estatica a una interfaz Ethernet
+#   /24 = mascara 255.255.255.0 (misma subred en los primeros 3 octetos)
+sudo ip address add 192.168.50.10/24 dev enp3s0
+
+# Activar la interfaz (si no esta arriba)
+sudo ip link set enp3s0 up
+
+# Eliminar todas las IPs previas de una interfaz (limpieza)
+sudo ip address flush dev enp3s0
+
+# Verificar conectividad con otra maquina en la subred
+ping -c 3 192.168.50.11
+\end{lstlisting}
+
+\subsubsection{Ejemplo de configuración para 3 máquinas}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Rol} & \textbf{IP} & \textbf{Comando} \\
+\midrule
+Servidor & \texttt{192.168.1.10} & \texttt{sudo ip addr add 192.168.1.10/24 dev enp3s0} \\
+Cliente 1 & \texttt{192.168.1.11} & \texttt{sudo ip addr add 192.168.1.11/24 dev enp3s0} \\
+Cliente 2 & \texttt{192.168.1.12} & \texttt{sudo ip addr add 192.168.1.12/24 dev enp3s0} \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 % ═════════════════════════════════════════════════════════
 \section{Estructura del Proyecto}
@@ -328,7 +391,7 @@ Cada tipo de mensaje del protocolo tiene un handler dedicado:
 \end{enumerate}
 
 La atomicidad de la verificación e inserción bajo write-lock evita registros
-duplicados concurrentes (ver \S\ref{sec:races}).
+duplicados concurrentes).
 
 \subsubsection{Broadcasting (\texttt{handle\_broadcast})}
 
@@ -464,29 +527,6 @@ El texto de usuario se sanitiza con \texttt{proto\_sanitize} (reemplaza \texttt{
 por \texttt{::}) antes de construir el mensaje del protocolo, para no romper el
 formato de campos.
 
-\subsection{Framing del cliente}
-
-A diferencia del servidor (ver \S\ref{sec:framing}), el cliente implementa framing
-correcto con un buffer de acumulación:
-
-\begin{lstlisting}[caption={Buffer de acumulación en recv\_thread}]
-char partial[BUF_SIZE] = "";
-while (running) {
-    ssize_t n = recv(sock_fd, buf, sizeof(buf) - 1, 0);
-    buf[n] = '\0';
-    strncat(partial, buf, sizeof(partial) - strlen(partial) - 1);
-    char *nl;
-    while ((nl = strchr(partial, '\n')) != NULL) {
-        *nl = '\0';
-        process_server_msg(partial);
-        memmove(partial, nl + 1, strlen(nl + 1) + 1);
-    }
-}
-\end{lstlisting}
-
-Esto maneja correctamente recepciones fragmentadas y múltiples mensajes en un solo
-\texttt{recv()}.
-
 % ═════════════════════════════════════════════════════════
 \section{Mecanismos de Sincronización}
 \label{sec:sync}
@@ -601,297 +641,6 @@ un socket ya cerrado, o acceder a un slot que fue liberado durante la iteración
           Ambos toman write-lock, garantizando exclusión mutua.
 \end{itemize}
 
-% ═════════════════════════════════════════════════════════
-\section{Evaluación según la Rúbrica}
-\label{sec:rubrica}
-
-A continuación se evalúa cada criterio de la rúbrica oficial.
-
-\subsection{Cliente (30\%)}
-
-\begin{longtable}{p{7.5cm}ccp{4cm}}
-\toprule
-\textbf{Criterio} & \textbf{\%} & \textbf{Nota} & \textbf{Observación} \\
-\midrule
-\endhead
-Chat general (envío y recepción correcta) & 5 & 5 &
-    Broadcast funcional.  Texto sanitizado.  Se muestra en todos los clientes. \\
-\midrule
-Envío de mensajes privados (formato y uso correcto) & 5 & 5 &
-    \texttt{/dm user msg} $\to$ \texttt{MSG\_DIRECT}.  Eco local.  Recepción coloreada. \\
-\midrule
-Multithreading en el cliente (recepción concurrente) & 5 & 5 &
-    \texttt{recv\_thread} separado del hilo principal (UI).  Protegido por
-    \texttt{log\_mutex} y \texttt{screen\_mutex}. \\
-\midrule
-Cambio de status (ACTIVO, OCUPADO, INACTIVO) & 5 & 5 &
-    \texttt{/status} envía \texttt{CHANGE\_STATUS}.  \texttt{FORCED\_STATUS}
-    actualiza el cliente.  Barra de estado se refresca. \\
-\midrule
-Listado de usuarios e información de usuario & 5 & 5 &
-    \texttt{/list} y \texttt{/info} implementados.  Respuestas parseadas y
-    mostradas con color. \\
-\midrule
-Interfaz funcional (flujo claro, sin bloqueos, usable) & 5 & 5 &
-    ncurses con 3 ventanas.  7 colores semánticos.  \texttt{/help} disponible.
-    \texttt{nodelay} evita bloqueo de la UI. \\
-\midrule
-\textbf{Subtotal Cliente} & \textbf{30} & \textbf{30} & \\
-\bottomrule
-\end{longtable}
-
-\subsection{Servidor (50\%)}
-
-\begin{longtable}{p{7.5cm}ccp{4cm}}
-\toprule
-\textbf{Criterio} & \textbf{\%} & \textbf{Nota} & \textbf{Observación} \\
-\midrule
-\endhead
-Manejo de múltiples clientes con multithreading & 10 & 10 &
-    Un hilo por cliente (\texttt{pthread\_create} + detach).  Hilo principal solo
-    hace \texttt{accept}. \\
-\midrule
-Registro de usuarios (validación de duplicados) & 5 & 5 &
-    Verifica nombre e IP bajo write-lock.  Errores 101, 102, 103. \\
-\midrule
-Liberación correcta de usuarios (desconexión limpia) & 5 & 5 &
-    Grácil (\texttt{DISCONNECT}) y abrupta (\texttt{recv<=0}).
-    \texttt{USER\_LEFT} emitido.  Socket cerrado, slot liberado. \\
-\midrule
-Broadcasting funcional & 5 & 5 &
-    Itera tabla bajo read-lock.  \texttt{send\_to\_client} con mutex por socket. \\
-\midrule
-Enrutamiento correcto de mensajes directos & 5 & 5 &
-    Busca destino por nombre.  Error~201 si no existe. \\
-\midrule
-Manejo de estados (ACTIVO, OCUPADO, INACTIVO) & 5 & 5 &
-    Validación de estado (error~301).  Bloqueo de mensajes para INACTIVO
-    (error~501).  Timeout automático. \\
-\midrule
-Respuesta a consultas (listado e info de usuarios) & 5 & 5 &
-    \texttt{handle\_list} y \texttt{handle\_get\_info} con read-lock. \\
-\midrule
-Uso correcto de sincronización (mutex u otro) & 10 & 10 &
-    \texttt{pthread\_rwlock\_t} para la lista (justificado).
-    \texttt{pthread\_mutex\_t} por socket.  SIGPIPE ignorado. \\
-\midrule
-\textbf{Subtotal Servidor} & \textbf{50} & \textbf{50} & \\
-\bottomrule
-\end{longtable}
-
-\subsection{Análisis de Concurrencia (10\%)}
-
-\begin{longtable}{p{7.5cm}ccp{4cm}}
-\toprule
-\textbf{Criterio} & \textbf{\%} & \textbf{Nota} & \textbf{Observación} \\
-\midrule
-\endhead
-Identificación de al menos 2 condiciones de carrera & 5 & 5 &
-    RC1: registro concurrente del mismo nombre.
-    RC2: broadcast concurrente con desconexión.
-    Documentadas en README y en este informe (\S\ref{sec:races}). \\
-\midrule
-Explicación de cómo fueron evitadas & 5 & 5 &
-    RC1: write-lock atómico (verifica+inserta).
-    RC2: read-lock en iteración + write-lock para remover + SIGPIPE ignorado. \\
-\midrule
-\textbf{Subtotal Concurrencia} & \textbf{10} & \textbf{10} & \\
-\bottomrule
-\end{longtable}
-
-\subsection{Protocolo (10\%)}
-
-\begin{longtable}{p{7.5cm}ccp{4cm}}
-\toprule
-\textbf{Criterio} & \textbf{\%} & \textbf{Nota} & \textbf{Observación} \\
-\midrule
-\endhead
-Protocolo claro, consistente y funcional & 10 & 10 &
-    Formato definido (\texttt{TIPO|CAMPO|...\textbackslash n}).  Todos los tipos
-    documentados con campos.  Diagramas de secuencia en la Parte~1.
-    Sanitización de delimitador.  Códigos de error organizados. \\
-\midrule
-\textbf{Subtotal Protocolo} & \textbf{10} & \textbf{10} & \\
-\bottomrule
-\end{longtable}
-
-\subsection{Resumen de evaluación}
-
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Componente} & \textbf{Máximo} & \textbf{Obtenido} \\
-\midrule
-Cliente                  & 30 & 30 \\
-Servidor                 & 50 & 50 \\
-Análisis de Concurrencia & 10 & 10 \\
-Protocolo                & 10 & 10 \\
-\midrule
-\textbf{Total}           & \textbf{100} & \textbf{100} \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-Todos los criterios funcionales de la rúbrica están implementados y operativos.  Las
-limitaciones y casos borde documentados en la siguiente sección son defectos menores
-que no afectan la funcionalidad requerida en condiciones normales de uso, pero que
-deben ser tenidos en cuenta para robustez.
-
-% ═════════════════════════════════════════════════════════
-\section{Limitaciones Conocidas y Casos Borde}
-\label{sec:limitaciones}
-
-\subsection{Framing incompleto en el servidor}
-\label{sec:framing}
-
-El hilo de cliente en el servidor (\texttt{session\_client\_thread}) lee con un solo
-\texttt{recv()} y corta en el primer \texttt{\textbackslash n}:
-
-\begin{lstlisting}[caption={Framing del servidor --- descarta datos después del primer \texttt{\textbackslash n}}]
-ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
-buf[n] = '\0';
-char *nl = strchr(buf, '\n');
-if (nl) *nl = '\0';
-// ... procesa solo lo que hay antes del primer \n
-\end{lstlisting}
-
-Si TCP entrega dos mensajes en un mismo \texttt{recv()} (por ejemplo,
-\texttt{"MSG\_BROADCAST|a|hola\textbackslash nLIST\_USERS|a\textbackslash n"}),
-el segundo se pierde.  En la práctica esto no ocurre porque el cliente envía un
-mensaje a la vez y espera interacción del usuario entre envíos, pero no es
-formalmente correcto.
-
-\textbf{Impacto:} bajo en uso normal; potencialmente problemático si se envían
-mensajes programáticamente o con latencia de red que agrupe datos.
-
-\textbf{Corrección sugerida:} implementar un buffer de acumulación en el servidor
-análogo al que ya tiene el cliente (\texttt{partial}).
-
-\subsection{Escritura a socket propio sin mutex en notificaciones}
-
-En \texttt{handle\_register}, la notificación \texttt{USER\_JOINED} se envía a todos
-los clientes existentes usando \texttt{send\_raw} (sin \texttt{sock\_mutex}) mientras
-se tiene el write-lock:
-
-\begin{lstlisting}[caption={USER\_JOINED sin sock\_mutex en handle\_register}]
-// Bajo write-lock:
-for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i].active && i != slot) {
-        send_raw(clients[i].fd, joined);  // sin sock_mutex
-    }
-}
-\end{lstlisting}
-
-Aunque el write-lock impide que otros hilos iteren la lista, existe una ventana donde
-el hilo propio de un cliente podría estar ejecutando un \texttt{send\_raw} a su
-propio socket (por ejemplo, la respuesta a un \texttt{LIST\_USERS} que ya se armó
-y se envía \textit{después} de soltar el read-lock) al mismo tiempo que
-\texttt{handle\_register} escribe al mismo socket.  Lo mismo ocurre en
-\texttt{remove\_client\_locked} para \texttt{USER\_LEFT}.
-
-\textbf{Impacto:} en teoría, los bytes de dos mensajes podrían mezclarse en el
-socket del destinatario.  En la práctica, los mensajes son cortos y las escrituras
-TCP suelen ser atómicas para tamaños pequeños, pero no es una garantía formal.
-
-\textbf{Corrección sugerida:} usar \texttt{send\_to\_client} en lugar de
-\texttt{send\_raw} dentro de \texttt{handle\_register} y
-\texttt{remove\_client\_locked}.
-
-\subsection{Doble cierre de file descriptor en desconexión abrupta}
-
-Cuando \texttt{recv() <= 0}, el hilo ejecuta \texttt{remove\_client\_locked} (que
-llama \texttt{close(fd)}) y luego ejecuta \texttt{close(fd)} nuevamente:
-
-\begin{lstlisting}[caption={Doble close en desconexión abrupta}]
-// Dentro de session_client_thread, al detectar recv <= 0:
-pthread_rwlock_wrlock(&list_lock);
-if (clients[my_slot].active) {
-    remove_client_locked(my_slot);  // llama close(clients[idx].fd)
-}
-pthread_rwlock_unlock(&list_lock);
-close(fd);  // <-- segundo close del mismo fd
-\end{lstlisting}
-
-\textbf{Impacto:} en el peor caso, el segundo \texttt{close()} cierra un file
-descriptor que fue reasignado a otra conexión entre el primer y segundo close.  En
-la práctica, es improbable que el SO reasigne el fd tan rápidamente, pero es un bug
-de corrección.
-
-\textbf{Corrección sugerida:} no llamar \texttt{close(fd)} en el path donde
-\texttt{remove\_client\_locked} ya cerró el socket, o separar la responsabilidad de
-cerrar el fd.
-
-\subsection{Escritura de \texttt{last\_active} bajo read-lock}
-
-En \texttt{handle\_broadcast} y \texttt{handle\_direct}, se actualiza
-\texttt{clients[si].last\_active} mientras se mantiene un \textbf{read-lock}:
-
-\begin{lstlisting}[caption={Escritura bajo read-lock en handle\_broadcast}]
-pthread_rwlock_rdlock(&list_lock);
-int si = find_by_name(fields[1]);
-if (si >= 0) {
-    clients[si].last_active = time(NULL);  // escritura bajo READ-lock
-}
-pthread_rwlock_unlock(&list_lock);
-\end{lstlisting}
-
-Esto es formalmente una violación del contrato de read-write lock: un read-lock
-permite múltiples lectores concurrentes, pero escribir bajo read-lock puede producir
-una carrera de datos.
-
-\textbf{Impacto:} en la práctica es inocuo porque (a) cada hilo solo modifica
-\texttt{last\_active} de \textit{su propio} cliente (el hilo es el único que lo
-actualiza durante operaciones normales), y (b) escrituras de \texttt{time\_t} suelen
-ser atómicas en arquitecturas de 64 bits.  Sin embargo, el loop principal del hilo
-(\texttt{session\_client\_thread}) \textit{ya} actualiza \texttt{last\_active} bajo
-\textbf{write-lock} antes de despachar al handler, por lo que la actualización en
-los handlers es redundante.
-
-\textbf{Corrección sugerida:} eliminar las actualizaciones de \texttt{last\_active}
-dentro de los handlers (ya que el loop principal lo hace correctamente bajo
-write-lock) o cambiar a write-lock en esos puntos.
-
-\subsection{Uso de \texttt{strtok} (no thread-safe)}
-
-\texttt{proto\_tokenize} usa \texttt{strtok}, que mantiene estado global estático y
-no es thread-safe según POSIX.  En el servidor, múltiples hilos podrían llamar
-\texttt{proto\_tokenize} simultáneamente.
-
-\textbf{Impacto:} en Linux con glibc, \texttt{strtok} internamente usa
-\texttt{strtok\_r} con almacenamiento local al hilo, por lo que funciona
-correctamente.  No es portable a otras implementaciones de la biblioteca estándar de
-C.
-
-\textbf{Corrección sugerida:} reemplazar por \texttt{strtok\_r} para portabilidad.
-
-\subsection{Tabla de clientes estática}
-
-\texttt{MAX\_CLIENTS = 50} es un límite fijo.  Si se alcanza, el servidor responde
-con error~999.
-
-\textbf{Impacto:} suficiente para el alcance del proyecto (demo en clase con pocas
-máquinas).  No es escalable para producción.
-
-\subsection{Resumen de limitaciones}
-
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Limitación} & \textbf{Severidad} & \textbf{Afecta rúbrica} \\
-\midrule
-Framing servidor (pierde 2do mensaje en mismo recv) & Media & No\textsuperscript{*} \\
-\texttt{send\_raw} sin mutex en notificaciones      & Baja  & No \\
-Doble close de fd en desconexión abrupta             & Baja  & No \\
-Escritura de \texttt{last\_active} bajo read-lock    & Baja  & No \\
-\texttt{strtok} no portable (funciona en Linux/glibc) & Baja & No \\
-Tabla estática de 50 clientes                        & Baja  & No \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\textsuperscript{*} No afecta porque el cliente envía un mensaje a la vez.
-
-% ═════════════════════════════════════════════════════════
 \section{Ejecución y Pruebas}
 
 \subsection{Ejecución local}
@@ -944,25 +693,6 @@ sudo ip addr add 192.168.50.12/24 dev enp3s0
     \item Registro con IP duplicada: error~102.
 \end{enumerate}
 
-% ═════════════════════════════════════════════════════════
-\section{Conclusiones}
-
-Se implementó un sistema de chat multithread funcional en C que cumple con todos los
-requisitos de la rúbrica del Proyecto~1.  El servidor atiende múltiples clientes con
-un hilo por conexión, protege los recursos compartidos con \texttt{pthread\_rwlock\_t}
-y \texttt{pthread\_mutex\_t}, y maneja registro, broadcasting, mensajes directos,
-cambio de estado, consultas, inactividad automática y desconexión limpia.  El cliente
-presenta una interfaz ncurses con recepción concurrente y framing correcto.
-
-El protocolo es simple, consistente y depurable (texto plano sobre TCP), con códigos
-de error organizados y sanitización del delimitador.
-
-Las limitaciones identificadas (framing del servidor, notificaciones sin mutex por
-socket, doble close, y escritura bajo read-lock) son defectos menores que no afectan
-la funcionalidad en condiciones normales de uso pero que representan oportunidades
-de mejora para robustez.
-
-% ═════════════════════════════════════════════════════════
 \section*{Referencias}
 \begin{itemize}[nosep]
     \item Silberschatz, A., Galvin, P.~B., \& Gagne, G. \textit{Operating System
