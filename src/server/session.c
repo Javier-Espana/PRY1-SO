@@ -196,9 +196,6 @@ static void handle_broadcast(int sender_fd, char *fields[], int nf) {
         send_raw(sender_fd, "ERROR|501|Debes cambiar de estado antes de enviar mensajes\n");
         return;
     }
-    if (si >= 0) {
-        clients[si].last_active = time(NULL);
-    }
     pthread_rwlock_unlock(&list_lock);
 
     char buf[BUF_SIZE];
@@ -232,9 +229,6 @@ static void handle_direct(int sender_fd, char *fields[], int nf) {
         pthread_rwlock_unlock(&list_lock);
         send_raw(sender_fd, "ERROR|501|Debes cambiar de estado antes de enviar mensajes\n");
         return;
-    }
-    if (si >= 0) {
-        clients[si].last_active = time(NULL);
     }
 
     int di = find_by_name(fields[2]);
@@ -421,8 +415,9 @@ void *session_client_thread(void *arg) {
                 if (username_copy[0] != '\0') {
                     printf("[SERVER] Usuario '%s' desconectado abruptamente\n", username_copy);
                 }
+            } else {
+                close(fd);
             }
-            close(fd);
             return NULL;
         }
         buf[n] = '\0';
