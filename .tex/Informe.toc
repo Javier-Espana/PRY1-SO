@@ -1,0 +1,40 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {section}{\numberline {1}Introducción}{3}{section.1}%
+\contentsline {section}{\numberline {2}Investigación: Redes, Sockets y Configuración IP}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Sockets TCP/IP}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Configuración de red con \texttt {ip}}{3}{subsection.2.2}%
+\contentsline {subsubsection}{\numberline {2.2.1}Comandos utilizados}{3}{subsubsection.2.2.1}%
+\contentsline {subsubsection}{\numberline {2.2.2}Ejemplo de configuración para 3 máquinas}{4}{subsubsection.2.2.2}%
+\contentsline {section}{\numberline {3}Estructura del Proyecto}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Compilación}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Arquitectura por capas}{5}{subsection.3.2}%
+\contentsline {section}{\numberline {4}Protocolo de Comunicación}{5}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Mensajes del cliente al servidor}{5}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Mensajes del servidor al cliente}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Códigos de error}{6}{subsection.4.3}%
+\contentsline {section}{\numberline {5}Diseño del Servidor}{6}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Modelo de concurrencia}{6}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Tabla de clientes}{7}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Handlers del protocolo}{7}{subsection.5.3}%
+\contentsline {subsubsection}{\numberline {5.3.1}Registro (\texttt {handle\_register})}{7}{subsubsection.5.3.1}%
+\contentsline {subsubsection}{\numberline {5.3.2}Broadcasting (\texttt {handle\_broadcast})}{8}{subsubsection.5.3.2}%
+\contentsline {subsubsection}{\numberline {5.3.3}Mensaje directo (\texttt {handle\_direct})}{8}{subsubsection.5.3.3}%
+\contentsline {subsubsection}{\numberline {5.3.4}Desconexión (\texttt {handle\_disconnect})}{8}{subsubsection.5.3.4}%
+\contentsline {subsection}{\numberline {5.4}Inactividad}{8}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Diseño del Cliente}{9}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Modelo de concurrencia}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Interfaz ncurses}{9}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Sincronización en el cliente}{9}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Comandos del usuario}{10}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Mecanismos de Sincronización}{10}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Read-Write Lock para la lista de usuarios}{10}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Mutex por socket}{10}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Mutexes del cliente}{11}{subsection.7.3}%
+\contentsline {section}{\numberline {8}Condiciones de Carrera}{11}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Condición 1: Registro concurrente del mismo nombre}{11}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Condición 2: Broadcast concurrente con desconexión}{11}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Condiciones adicionales atendidas}{12}{subsection.8.3}%
+\contentsline {section}{\numberline {9}Ejecución y Pruebas}{12}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Ejecución local}{12}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Ejecución por Ethernet}{12}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Checklist de pruebas}{13}{subsection.9.3}%
